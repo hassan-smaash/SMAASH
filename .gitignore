@@ -1,1 +1,57 @@
+# ── Secrets / environment ───────────────────────────────
+# Never commit API keys (Resend, Supabase service_role, etc.)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
+
+# ── Vercel ──────────────────────────────────────────────
 .vercel
+
+# ── Node (only if you ever npm/npx install tooling) ─────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+.npm/
+.pnp.*
+
+# ── Logs & runtime junk ─────────────────────────────────
+*.log
+logs/
+pids/
+*.pid
+
+# ── Editor / IDE ────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# ── OS files ────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── Local tooling / AI assistant config ─────────────────
+.claude/
+
+# ── Project-specific scratch (uncomment if you don't want them tracked) ──
+# index backup.html
+# src_index.html
+
+
+sql/*
