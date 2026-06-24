@@ -220,7 +220,7 @@ function PublicTournamentScreen({ slug }) {
   }
   return wrap(/* @__PURE__ */ React.createElement(React.Fragment, null, header, body, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", marginTop: 24, fontSize: 10, color: "var(--text-faint)", letterSpacing: 1 } }, "Powered by SMAASH · live results")));
 }
-function TournamentManageView({ tId, tournaments, profiles = [], refreshTournaments = null }) {
+function TournamentManageView({ tId, tournaments, profiles = [], refreshTournaments = null, currentUser = null, appRole = "player", myProfile = null }) {
   var _a, _b;
   const t = tournaments.find((x) => x.id === tId);
   if (!t) return null;
@@ -231,8 +231,15 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
     setToast({ msg, c });
     setTimeout(() => setToast(null), 2400);
   };
+  const [coDirectors, setCoDirectors] = useState([]);
+  const isAdmin = appRole === "admin" || !!(myProfile && myProfile.role === "admin");
+  const isTD = !!(currentUser && t && t.created_by && t.created_by === currentUser.id);
+  const isCoDirector = !!(currentUser && coDirectors.some((cd) => cd.player_id === currentUser.id && cd.status === "accepted"));
+  const canManage = isTD || isCoDirector || isAdmin;
   const [entries, setEntries] = useState([]);
   const [entryQuery, setEntryQuery] = useState("");
+  const [pendingPartner, setPendingPartner] = useState(null);
+  const isDoublesTourney = (t.matchType || "").indexOf("doubles") >= 0;
   const loadEntries = () => {
     const tok = smaashDB.auth.getToken() || SUPABASE_ANON_KEY;
     return fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_entries?tournament_id=eq.${tId}&select=*&order=seed.asc.nullslast,created_at.asc`, {
@@ -240,38 +247,54 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
     }).then((r) => r.json()).then((data) => { if (Array.isArray(data)) setEntries(data); }).catch(() => {});
   };
   useEffect(() => { loadEntries(); }, [tId]);
-  const enteredIds = new Set(entries.map((e) => e.player_id));
+  const enteredIds = new Set();
+  entries.forEach((e) => { if (e.player_id) enteredIds.add(e.player_id); if (e.partner_id) enteredIds.add(e.partner_id); });
   const nameFor = (pid) => { const p = profiles.find((x) => x.id === pid); return (p && p.name) || "Player"; };
-  const addEntries = (players) => {
+  const ratingSnap = (player, partner) => {
+    if (!isDoublesTourney) return toDisplayRating(player.rating || 500);
+    const a = player.doublesRating || 500, b = partner && partner.doublesRating || a;
+    return toDisplayRating((a + b) / 2);
+  };
+  const addEntries = (items) => {
+    if (!canManage) { showToast("Only the tournament director can manage entries", "var(--danger)"); return; }
     const tok = smaashDB.auth.getToken();
     if (!tok) { showToast("Sign in first", "var(--danger)"); return; }
     const cap = t.drawSize || 16;
     const room = cap - entries.length;
-    if (room <= 0) { showToast("Draw is full (" + cap + ") — remove a player first", "var(--danger)"); return; }
-    let toAdd = players.filter((p) => !enteredIds.has(p.id));
-    if (toAdd.length === 0) { showToast("Already added", "var(--warn)"); return; }
+    if (room <= 0) { showToast("Draw is full (" + cap + ") — remove an entry first", "var(--danger)"); return; }
+    let toAdd = items.filter((it) => it.player && !enteredIds.has(it.player.id) && (!it.partner || !enteredIds.has(it.partner.id)));
+    if (isDoublesTourney) toAdd = toAdd.filter((it) => it.partner);
+    if (toAdd.length === 0) { showToast(isDoublesTourney ? "Pick two available players" : "Already added", "var(--warn)"); return; }
     const trimmed = toAdd.length > room;
     toAdd = toAdd.slice(0, room);
-    const rows = toAdd.map((p) => ({
+    const rows = toAdd.map(({ player, partner }) => ({
       tournament_id: tId,
-      player_id: p.id,
-      display_name: p.name || null,
-      entry_rating_snapshot: Number((toDisplayRating(p.doublesRating || 500)).toFixed(3)),
-      entry_rd_snapshot: Math.round(p.rd || 350),
+      player_id: player.id,
+      partner_id: isDoublesTourney && partner ? partner.id : null,
+      display_name: isDoublesTourney && partner ? player.name + " & " + partner.name : player.name || null,
+      entry_rating_snapshot: Number(ratingSnap(player, partner).toFixed(3)),
+      entry_rd_snapshot: Math.round(player.rd || 350),
       status: "registered"
     }));
-    if (rows.length === 0) { showToast("Already added", "var(--warn)"); return; }
     fetch("https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_entries", {
       method: "POST",
       headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + tok, "Content-Type": "application/json", "Prefer": "return=minimal" },
       body: JSON.stringify(rows)
     }).then(async (res) => {
       if (!res.ok) { console.error("Add entries failed:", res.status, await res.text()); showToast("Add failed", "var(--danger)"); return; }
+      setPendingPartner(null);
       loadEntries();
-      showToast(rows.length + " added" + (trimmed ? " — draw now full (" + (t.drawSize || 16) + ")" : "") + " ✓");
+      showToast(rows.length + (isDoublesTourney ? " pair" : "") + " added" + (trimmed ? " — draw now full (" + (t.drawSize || 16) + ")" : "") + " ✓");
     }).catch(() => showToast("Add failed", "var(--danger)"));
   };
+  const pickCandidate = (p) => {
+    if (!isDoublesTourney) { addEntries([{ player: p }]); return; }
+    if (!pendingPartner) { setPendingPartner(p); return; }
+    if (pendingPartner.id === p.id) { setPendingPartner(null); return; }
+    addEntries([{ player: pendingPartner, partner: p }]);
+  };
   const removeEntry = (entryId) => {
+    if (!canManage) { showToast("Only the tournament director can manage entries", "var(--danger)"); return; }
     const tok = smaashDB.auth.getToken();
     if (!tok) return;
     fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_entries?id=eq.${entryId}`, {
@@ -279,11 +302,19 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
     }).then(() => loadEntries()).catch(() => {});
   };
   const quickAddDummies = (count) => {
-    const avail = profiles.filter((p) => !enteredIds.has(p.id)).slice(0, count);
-    if (avail.length === 0) { showToast("No more players to add", "var(--warn)"); return; }
-    addEntries(avail);
+    const avail = profiles.filter((p) => !enteredIds.has(p.id) && (!pendingPartner || p.id !== pendingPartner.id));
+    if (isDoublesTourney) {
+      const items = [];
+      for (let i = 0; i + 1 < avail.length && items.length < count; i += 2) items.push({ player: avail[i], partner: avail[i + 1] });
+      if (items.length === 0) { showToast("Need 2+ free players to form a pair", "var(--warn)"); return; }
+      addEntries(items);
+    } else {
+      const items = avail.slice(0, count).map((p) => ({ player: p }));
+      if (items.length === 0) { showToast("No more players to add", "var(--warn)"); return; }
+      addEntries(items);
+    }
   };
-  const entryCandidates = profiles.filter((p) => !enteredIds.has(p.id) && (!entryQuery || (p.name || "").toLowerCase().includes(entryQuery.toLowerCase()))).slice(0, 12);
+  const entryCandidates = profiles.filter((p) => !enteredIds.has(p.id) && (!pendingPartner || p.id !== pendingPartner.id) && (!entryQuery || (p.name || "").toLowerCase().includes(entryQuery.toLowerCase()))).slice(0, 12);
   const [dbMatches, setDbMatches] = useState([]);
   const [tMatchRows, setTMatchRows] = useState([]);
   const [confirmingId, setConfirmingId] = useState(null);
@@ -291,11 +322,12 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
   const started = dbMatches.length > 0 || t.status === "in_progress" || t.status === "completed";
   const entriesSection = /* @__PURE__ */ React.createElement("div", { style: { background: "var(--surface)", borderRadius: 14, padding: "14px 16px", border: "1px solid var(--border)", marginBottom: 16 } },
     /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
-      /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Bebas Neue',sans-serif", fontSize: 16, letterSpacing: 2, color: "var(--text)" } }, "ENTRIES (" + entries.length + "/" + (t.drawSize || 16) + ")"),
+      /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Bebas Neue',sans-serif", fontSize: 16, letterSpacing: 2, color: "var(--text)" } }, "ENTRIES (" + entries.length + "/" + (t.drawSize || 16) + (isDoublesTourney ? " pairs" : "") + ")"),
       started ? /* @__PURE__ */ React.createElement("button", { onClick: () => reopenRegistration(), style: { background: "color-mix(in srgb,var(--danger) 10%,transparent)", border: "1px solid color-mix(in srgb,var(--danger) 28%,transparent)", borderRadius: 7, padding: "5px 10px", fontSize: 10, fontWeight: 700, color: "var(--danger)", cursor: "pointer", fontFamily: "inherit" } }, "Reopen registration") : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, [8, 16].map((nn) => /* @__PURE__ */ React.createElement("button", { key: nn, onClick: () => quickAddDummies(nn), disabled: entries.length >= (t.drawSize || 16), style: { background: "color-mix(in srgb,var(--purple) 12%,transparent)", border: "1px solid color-mix(in srgb,var(--purple) 28%,transparent)", borderRadius: 7, padding: "5px 10px", fontSize: 10, fontWeight: 700, color: "var(--purple)", cursor: entries.length >= (t.drawSize || 16) ? "not-allowed" : "pointer", opacity: entries.length >= (t.drawSize || 16) ? 0.4 : 1, fontFamily: "inherit" } }, "+" + nn + " dummy")))),
     entries.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 } }, entries.map((e) => /* @__PURE__ */ React.createElement("span", { key: e.id, onClick: started ? void 0 : () => removeEntry(e.id), title: started ? "" : "Click to remove", style: { fontSize: 11, background: "var(--sunken)", borderRadius: 6, padding: "4px 9px", color: "var(--text-muted)", cursor: started ? "default" : "pointer" } }, (e.seed ? "#" + e.seed + " " : "") + (e.display_name || nameFor(e.player_id))))),
-    !started && /* @__PURE__ */ React.createElement("input", { value: entryQuery, onChange: (ev) => setEntryQuery(ev.target.value), placeholder: "Search players to add…", style: { width: "100%", background: "var(--sunken)", border: "1px solid var(--border)", borderRadius: 9, padding: "9px 12px", color: "var(--text)", fontSize: 12, outline: "none", fontFamily: "inherit", boxSizing: "border-box", marginBottom: 8 } }),
-    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 200, overflowY: "auto" } }, started ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-dim)", padding: "4px 2px" } }, "🔒 Roster locked — tournament has started") : entries.length >= (t.drawSize || 16) ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--warn)", padding: "4px 2px" } }, "Draw full (" + (t.drawSize || 16) + ") — remove a player to add another") : entryCandidates.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-faint)", padding: "4px 2px" } }, "No players found") : entryCandidates.map((p) => /* @__PURE__ */ React.createElement("div", { key: p.id, style: { display: "flex", alignItems: "center", gap: 8, padding: "5px 2px" } }, /* @__PURE__ */ React.createElement(Avatar, { initials: p.avatar || "?", size: 24, color: "var(--purple)" }), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: 12, fontWeight: 600, color: "var(--text)" } }, p.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "var(--text-dim)" } }, fmt(p.doublesRating)), /* @__PURE__ */ React.createElement("button", { onClick: () => addEntries([p]), style: { background: "color-mix(in srgb,var(--success) 12%,transparent)", border: "1px solid color-mix(in srgb,var(--success) 28%,transparent)", borderRadius: 7, padding: "4px 12px", fontSize: 10, fontWeight: 700, color: "var(--success)", cursor: "pointer", fontFamily: "inherit" } }, "Add")))));
+    isDoublesTourney && pendingPartner && !started && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, background: "color-mix(in srgb,var(--purple) 10%,transparent)", border: "1px solid color-mix(in srgb,var(--purple) 25%,transparent)", borderRadius: 8, padding: "7px 11px", marginBottom: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: 11, color: "var(--purple)", fontWeight: 700 } }, "Pairing " + (pendingPartner.name || "player") + " — pick a partner below"), /* @__PURE__ */ React.createElement("button", { onClick: () => setPendingPartner(null), style: { background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "3px 8px", fontSize: 10, color: "var(--text-faint)", cursor: "pointer", fontFamily: "inherit" } }, "Cancel")),
+    !started && /* @__PURE__ */ React.createElement("input", { value: entryQuery, onChange: (ev) => setEntryQuery(ev.target.value), placeholder: isDoublesTourney ? "Search players to pair…" : "Search players to add…", style: { width: "100%", background: "var(--sunken)", border: "1px solid var(--border)", borderRadius: 9, padding: "9px 12px", color: "var(--text)", fontSize: 12, outline: "none", fontFamily: "inherit", boxSizing: "border-box", marginBottom: 8 } }),
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 200, overflowY: "auto" } }, started ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-dim)", padding: "4px 2px" } }, "🔒 Roster locked — tournament has started") : entries.length >= (t.drawSize || 16) ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--warn)", padding: "4px 2px" } }, "Draw full (" + (t.drawSize || 16) + ") — remove a player to add another") : entryCandidates.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-faint)", padding: "4px 2px" } }, "No players found") : entryCandidates.map((p) => /* @__PURE__ */ React.createElement("div", { key: p.id, style: { display: "flex", alignItems: "center", gap: 8, padding: "5px 2px" } }, /* @__PURE__ */ React.createElement(Avatar, { initials: p.avatar || "?", size: 24, color: "var(--purple)" }), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: 12, fontWeight: 600, color: "var(--text)" } }, p.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "var(--text-dim)" } }, fmt(p.doublesRating)), /* @__PURE__ */ React.createElement("button", { onClick: () => pickCandidate(p), style: { background: "color-mix(in srgb,var(--success) 12%,transparent)", border: "1px solid color-mix(in srgb,var(--success) 28%,transparent)", borderRadius: 7, padding: "4px 12px", fontSize: 10, fontWeight: 700, color: "var(--success)", cursor: "pointer", fontFamily: "inherit" } }, isDoublesTourney ? pendingPartner ? "Pair" : "Pick" : "Add")))));
   const [tScores, setTScores] = useState({});
   const loadBracket = () => {
     const tok = smaashDB.auth.getToken() || SUPABASE_ANON_KEY;
@@ -320,6 +352,13 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
   };
   useEffect(() => { loadTMatchRows(); }, [tId]);
   useEffect(() => {
+    if (!tId) return;
+    const tok = smaashDB.auth.getToken() || SUPABASE_ANON_KEY;
+    fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_directors?tournament_id=eq.${tId}&select=player_id,status`, {
+      headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + tok }
+    }).then((r) => r.json()).then((data) => { if (Array.isArray(data)) setCoDirectors(data); }).catch(() => {});
+  }, [tId]);
+  useEffect(() => {
     if (!smaashRealtime || !tId) return;
     const tok = smaashDB.auth.getToken();
     if (tok) smaashRealtime.realtime.setAuth(tok);
@@ -329,6 +368,7 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
     return () => { if (debounce) clearTimeout(debounce); smaashRealtime.removeChannel(channel); };
   }, [tId]);
   const reopenRegistration = () => {
+    if (!canManage) { showToast("Only the tournament director can reopen registration", "var(--danger)"); return; }
     const tok = smaashDB.auth.getToken();
     if (!tok) { showToast("Sign in first", "var(--danger)"); return; }
     if (typeof window !== "undefined" && !window.confirm(dbMatches.some((m) => m.match_id) ? "Reopening clears the bracket. Ratings from played matches are NOT reverted. Continue?" : "Reopen registration and clear the current draw?")) return;
@@ -358,17 +398,74 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
     if (refreshTournaments) refreshTournaments();
     showToast("Round robin generated — " + rows.length + " matches ✓");
   };
+  const generateDoubleElim = async (tok, forceShuffle) => {
+    let seeded = entries.slice();
+    if (forceShuffle || (t.seedingMethod || "rating") === "random") seeded.sort(() => Math.random() - 0.5);
+    else seeded.sort((a, b) => (b.entry_rating_snapshot || 0) - (a.entry_rating_snapshot || 0));
+    const n = seeded.length;
+    const size = tNextPow2(n);
+    if (n !== size) { showToast("Double elimination needs a power-of-2 entry count (4, 8, 16, 32) — you have " + n + ".", "var(--warn)"); return; }
+    const k = Math.round(Math.log2(size));
+    const bySeed = tSeedSlots(size).map((sn) => seeded[sn - 1]);
+    const wb = [];
+    for (let r = 1; r <= k; r++) { const arr = []; for (let i = 0; i < size / Math.pow(2, r); i++) arr.push({ id: tUUID(), kind: "W", round: r, idx: i, a: null, b: null, next: null, wslot: null, lnext: null, lslot: null }); wb.push(arr); }
+    const lbN = 2 * (k - 1);
+    const lb = [];
+    for (let j = 1; j <= lbN; j++) { const t2 = Math.ceil(j / 2); const arr = []; for (let i = 0; i < size / Math.pow(2, t2 + 1); i++) arr.push({ id: tUUID(), kind: "L", round: j, idx: i, a: null, b: null, next: null, wslot: null }); lb.push(arr); }
+    const gf = { id: tUUID(), kind: "G", round: 1, idx: 0, a: null, b: null, next: null };
+    // Winners bracket: winner advances; loser drops to losers bracket.
+    for (let r = 0; r < k; r++) wb[r].forEach((m, i) => {
+      if (r + 1 < k) { m.next = wb[r + 1][Math.floor(i / 2)].id; m.wslot = i % 2 === 0 ? "a" : "b"; }
+      else { m.next = gf.id; m.wslot = "a"; }
+      if (r === 0) { m.lnext = lb[0][Math.floor(i / 2)].id; m.lslot = i % 2 === 0 ? "a" : "b"; }
+      else { m.lnext = lb[2 * r - 1][i].id; m.lslot = "a"; }
+    });
+    // Losers bracket advancement.
+    for (let j = 1; j <= lbN; j++) lb[j - 1].forEach((m, i) => {
+      if (j === lbN) { m.next = gf.id; m.wslot = "b"; }
+      else if (j % 2 === 1) { m.next = lb[j][i].id; m.wslot = "b"; }
+      else { m.next = lb[j][Math.floor(i / 2)].id; m.wslot = i % 2 === 0 ? "a" : "b"; }
+    });
+    wb[0].forEach((m, i) => { m.a = bySeed[i * 2]; m.b = bySeed[i * 2 + 1]; });
+    const labelW = (round) => { const cnt = size / Math.pow(2, round); return "Winners " + (cnt === 1 ? "Final" : cnt === 2 ? "Semis" : cnt === 4 ? "QF" : "R" + round); };
+    const all = [].concat.apply([], wb).concat([].concat.apply([], lb)).concat([gf]);
+    const rows = all.map((m) => ({
+      id: m.id, tournament_id: tId,
+      round_number: m.kind === "W" ? m.round : m.kind === "L" ? 100 + m.round : 200,
+      round_label: m.kind === "G" ? "Grand Final" : m.kind === "W" ? labelW(m.round) : "Losers R" + m.round,
+      bracket_slot: m.kind + m.round + "M" + (m.idx + 1),
+      player_a_entry_id: m.a ? m.a.id : null, player_b_entry_id: m.b ? m.b.id : null,
+      winner_entry_id: null, is_bye: false,
+      next_match_id: m.next || null, winner_slot: m.wslot || null,
+      loser_next_match_id: m.lnext || null, loser_slot: m.lslot || null
+    }));
+    // Topological insert order: a row goes in only after its next & loser targets exist (self-FK safe).
+    const ins = new Set(); const ordered = []; let guard = 0;
+    while (ordered.length < rows.length && guard++ < rows.length + 5) {
+      for (const r of rows) { if (ins.has(r.id)) continue; if ((!r.next_match_id || ins.has(r.next_match_id)) && (!r.loser_next_match_id || ins.has(r.loser_next_match_id))) { ins.add(r.id); ordered.push(r); } }
+    }
+    const cleared = await clearBracketRows(tok);
+    if (!cleared) { showToast("Couldn't clear old bracket — try again", "var(--danger)"); return; }
+    const hdr = { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + tok, "Content-Type": "application/json", "Prefer": "return=minimal" };
+    const res = await fetch("https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches", { method: "POST", headers: hdr, body: JSON.stringify(ordered) });
+    if (!res.ok) { console.error("DE insert failed:", res.status, await res.text()); showToast("Draw failed — did you run sql/tournament_de_columns.sql?", "var(--danger)"); return; }
+    await fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournaments?id=eq.${tId}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ status: "in_progress" }) }).catch(() => {});
+    loadBracket(); if (refreshTournaments) refreshTournaments();
+    showToast("Double-elim bracket generated — " + rows.length + " matches ✓");
+  };
   const generateDraw = async (forceShuffle) => {
+    if (!canManage) { showToast("Only the tournament director can generate the draw", "var(--danger)"); return; }
     if (generating) return;
     const tok = smaashDB.auth.getToken();
     if (!tok) { showToast("Sign in first", "var(--danger)"); return; }
     if (entries.length < 2) { showToast("Add at least 2 entries first", "var(--danger)"); return; }
     if (dbMatches.some((m) => m.match_id) && typeof window !== "undefined" && !window.confirm("This tournament already has played matches. Regenerating rebuilds the bracket but does NOT undo ratings already applied. Continue?")) return;
     const fmt = t.format || "";
-    if (fmt.indexOf("round_robin") !== 0 && fmt.indexOf("single") !== 0) { showToast("Only Single Elimination & Round Robin are wired up so far", "var(--warn)"); return; }
+    if (fmt.indexOf("round_robin") !== 0 && fmt.indexOf("single") !== 0 && fmt.indexOf("double") !== 0) { showToast("Single Elim, Double Elim & Round Robin are wired up. Triple is coming.", "var(--warn)"); return; }
     setGenerating(true);
     try {
     if (fmt.indexOf("round_robin") === 0) { await generateRoundRobin(tok, forceShuffle); return; }
+    if (fmt.indexOf("double") === 0) { await generateDoubleElim(tok, forceShuffle); return; }
     let seeded = entries.slice();
     if (forceShuffle || (t.seedingMethod || "rating") === "random") seeded.sort(() => Math.random() - 0.5);
     else seeded.sort((a, b) => (b.entry_rating_snapshot || 0) - (a.entry_rating_snapshot || 0));
@@ -421,10 +518,12 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
   dbMatches.forEach((m) => { (roundsMap[m.round_number] = roundsMap[m.round_number] || []).push(m); });
   const roundNums = Object.keys(roundsMap).map(Number).sort((a, b) => a - b);
   const isSingleElim = (t.format || "").indexOf("single") === 0;
+  const isDoubleElim = (t.format || "").indexOf("double") === 0;
   const isRoundRobin = (t.format || "").indexOf("round_robin") === 0;
   const setTScore = (id, side, v) => setTScores((s) => __spreadProps(__spreadValues({}, s), { [id]: __spreadProps(__spreadValues({}, s[id]), { [side]: v }) }));
   const tSlotForNext = (slot) => { const mm = /M(\d+)/.exec(slot || ""); const idx = mm ? parseInt(mm[1], 10) - 1 : 0; return idx % 2 === 0 ? "player_a_entry_id" : "player_b_entry_id"; };
   const confirmTMatch = (m) => {
+    if (!canManage) { showToast("Only the tournament director can submit scores", "var(--danger)"); return; }
     if (confirmingId) return;
     const sc = tScores[m.id] || {};
     const a = Number(sc.a), b = Number(sc.b);
@@ -454,10 +553,15 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
         if (!res.ok) { console.error("Tournament match insert failed:", res.status, await res.text()); showToast("Save failed", "var(--danger)"); setConfirmingId(null); return; }
         const rows = await res.json(); const nm = Array.isArray(rows) ? rows[0] : rows; const mid = nm && nm.id;
         if (mid) await fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/matches?id=eq.${mid}`, { method: "PATCH", headers: __spreadProps(__spreadValues({}, hdr), { "Prefer": "return=minimal" }), body: JSON.stringify({ status: "confirmed" }) });
-        await fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches?id=eq.${m.id}`, { method: "PATCH", headers: __spreadProps(__spreadValues({}, hdr), { "Prefer": "return=minimal" }), body: JSON.stringify({ winner_entry_id: winnerEntry.id, match_id: mid || null }) });
+        await fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches?id=eq.${m.id}`, { method: "PATCH", headers: __spreadProps(__spreadValues({}, hdr), { "Prefer": "return=minimal" }), body: JSON.stringify({ winner_entry_id: winnerEntry.id, match_id: mid || null, disputed_by: null, dispute_reason: null, dispute_created_at: null }) });
         if (m.next_match_id) {
-          const slot = tSlotForNext(m.bracket_slot);
+          const slot = m.winner_slot ? (m.winner_slot === "b" ? "player_b_entry_id" : "player_a_entry_id") : tSlotForNext(m.bracket_slot);
           await fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches?id=eq.${m.next_match_id}`, { method: "PATCH", headers: __spreadProps(__spreadValues({}, hdr), { "Prefer": "return=minimal" }), body: JSON.stringify({ [slot]: winnerEntry.id }) });
+        }
+        if (m.loser_next_match_id) {
+          const loserEntry = winnerEntry.id === eA.id ? eB : eA;
+          const lslot = m.loser_slot === "b" ? "player_b_entry_id" : "player_a_entry_id";
+          await fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches?id=eq.${m.loser_next_match_id}`, { method: "PATCH", headers: __spreadProps(__spreadValues({}, hdr), { "Prefer": "return=minimal" }), body: JSON.stringify({ [lslot]: loserEntry.id }) });
         }
         // Complete the tournament only when every non-bye match is resolved (works for SE and RR).
         const remaining = dbMatches.filter((x) => x.id !== m.id && !x.winner_entry_id && !x.is_bye).length;
@@ -473,6 +577,7 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
       }).catch((e) => { console.error("Tournament match error:", e); showToast("Save failed", "var(--danger)"); setConfirmingId(null); });
   };
   const undoResult = (m) => {
+    if (!canManage) { showToast("Only the tournament director can undo a result", "var(--danger)"); return; }
     if (typeof window !== "undefined" && !window.confirm("Undo this result and reopen the match? Ratings already applied are NOT reverted.")) return;
     const tok = smaashDB.auth.getToken();
     if (!tok) { showToast("Sign in first", "var(--danger)"); return; }
@@ -480,16 +585,36 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
       const nm = dbMatches.find((x) => x.id === m.next_match_id);
       if (nm && nm.winner_entry_id) { showToast("Undo the later-round match first", "var(--danger)"); return; }
     }
+    if (m.loser_next_match_id) {
+      const lm = dbMatches.find((x) => x.id === m.loser_next_match_id);
+      if (lm && lm.winner_entry_id) { showToast("Undo the losers-bracket match first", "var(--danger)"); return; }
+    }
     const hdr = { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + tok, "Content-Type": "application/json", "Prefer": "return=minimal" };
     const ops = [];
-    ops.push(fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches?id=eq.${m.id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ winner_entry_id: null, match_id: null }) }));
+    ops.push(fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches?id=eq.${m.id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ winner_entry_id: null, match_id: null, disputed_by: null, dispute_reason: null, dispute_created_at: null }) }));
     if (m.match_id) ops.push(fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/matches?id=eq.${m.match_id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ status: "voided" }) }));
-    if (m.next_match_id) { const slot = tSlotForNext(m.bracket_slot); ops.push(fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches?id=eq.${m.next_match_id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ [slot]: null }) })); }
+    if (m.next_match_id) { const slot = m.winner_slot ? (m.winner_slot === "b" ? "player_b_entry_id" : "player_a_entry_id") : tSlotForNext(m.bracket_slot); ops.push(fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches?id=eq.${m.next_match_id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ [slot]: null }) })); }
+    if (m.loser_next_match_id) { const lslot = m.loser_slot === "b" ? "player_b_entry_id" : "player_a_entry_id"; ops.push(fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournament_matches?id=eq.${m.loser_next_match_id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ [lslot]: null }) })); }
     Promise.all(ops).then(() => {
       if (t.status === "completed") fetch(`https://yqqezxyayndzmqahguac.supabase.co/rest/v1/tournaments?id=eq.${tId}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ status: "in_progress" }) }).then(() => { if (refreshTournaments) refreshTournaments(); }).catch(() => {});
       loadBracket(); loadTMatchRows();
       showToast("Result undone — re-enter the score");
     }).catch(() => showToast("Undo failed", "var(--danger)"));
+  };
+  const disputeMatch = (m) => {
+    const reason = typeof window !== "undefined" ? window.prompt("What's wrong with this result? (optional)", "") : "";
+    if (reason === null) return;
+    const tok = smaashDB.auth.getToken();
+    if (!tok) { showToast("Sign in to dispute", "var(--danger)"); return; }
+    fetch("https://yqqezxyayndzmqahguac.supabase.co/rest/v1/rpc/dispute_tournament_match", {
+      method: "POST",
+      headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + tok, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_match_id: m.id, p_reason: reason || "" })
+    }).then(async (res) => {
+      if (!res.ok) { console.error("Dispute failed:", res.status, await res.text()); showToast("Dispute failed — try again", "var(--danger)"); return; }
+      loadBracket();
+      showToast("Dispute sent to the tournament director ✓");
+    }).catch(() => showToast("Dispute failed", "var(--danger)"));
   };
   const matchRow = (m) => {
     const aWin = m.winner_entry_id && m.winner_entry_id === m.player_a_entry_id;
@@ -497,13 +622,14 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
     const done = !!m.winner_entry_id;
     const ready = m.player_a_entry_id && m.player_b_entry_id && !m.is_bye && !done;
     const sc = tScores[m.id] || {};
+    const iAmIn = !!(currentUser && [m.player_a_entry_id, m.player_b_entry_id].some((eid) => { const e = entryById(eid); return e && e.player_id === currentUser.id; }));
     const aName = m.player_a_entry_id ? entryDisplay(m.player_a_entry_id) : m.is_bye ? "BYE" : "TBD";
     const bName = m.player_b_entry_id ? entryDisplay(m.player_b_entry_id) : m.is_bye ? "BYE" : "TBD";
     const numInp = { width: 40, background: "var(--sunken)", border: "1px solid var(--border)", borderRadius: 7, padding: "6px 0", color: "var(--primary)", fontSize: 14, fontWeight: 700, textAlign: "center", outline: "none", fontFamily: "inherit" };
     return /* @__PURE__ */ React.createElement("div", { key: m.id, style: { background: "var(--surface)", border: "1px solid " + (done ? "color-mix(in srgb,var(--success) 22%,transparent)" : "var(--border)"), borderRadius: 10, padding: "8px 12px", marginBottom: 6, opacity: m.is_bye ? 0.55 : 1 } },
       /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: aWin ? "var(--success)" : "var(--text)" } }, aName, aWin ? " 🏆" : ""), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, color: "var(--text-faint)" } }, m.is_bye ? "BYE" : done ? "DONE" : "vs")),
       /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: bWin ? "var(--success)" : "var(--text-muted)", marginTop: 2 } }, bName, bWin ? " 🏆" : ""),
-      ready && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", marginTop: 8 } }, /* @__PURE__ */ React.createElement("input", { type: "number", min: 0, max: 30, value: sc.a == null ? "" : sc.a, onChange: (e) => setTScore(m.id, "a", e.target.value), placeholder: "21", style: numInp }), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--border-strong)" } }, "-"), /* @__PURE__ */ React.createElement("input", { type: "number", min: 0, max: 30, value: sc.b == null ? "" : sc.b, onChange: (e) => setTScore(m.id, "b", e.target.value), placeholder: "17", style: numInp }), /* @__PURE__ */ React.createElement("button", { onClick: () => confirmTMatch(m), disabled: confirmingId === m.id, style: { marginLeft: "auto", background: "color-mix(in srgb,var(--success) 13%,transparent)", border: "1px solid color-mix(in srgb,var(--success) 28%,transparent)", borderRadius: 7, padding: "5px 14px", fontSize: 10, fontWeight: 700, color: "var(--success)", cursor: confirmingId === m.id ? "wait" : "pointer", opacity: confirmingId === m.id ? 0.5 : 1, fontFamily: "inherit" } }, confirmingId === m.id ? "Saving…" : "Confirm")), done && !m.is_bye && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 6 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => undoResult(m), style: { background: "none", border: "1px solid color-mix(in srgb,var(--danger) 25%,transparent)", borderRadius: 6, padding: "3px 10px", fontSize: 9, fontWeight: 700, color: "var(--danger)", cursor: "pointer", fontFamily: "inherit" } }, "Undo")));
+      canManage && ready && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", marginTop: 8 } }, /* @__PURE__ */ React.createElement("input", { type: "number", min: 0, max: 30, value: sc.a == null ? "" : sc.a, onChange: (e) => setTScore(m.id, "a", e.target.value), placeholder: "21", style: numInp }), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--border-strong)" } }, "-"), /* @__PURE__ */ React.createElement("input", { type: "number", min: 0, max: 30, value: sc.b == null ? "" : sc.b, onChange: (e) => setTScore(m.id, "b", e.target.value), placeholder: "17", style: numInp }), /* @__PURE__ */ React.createElement("button", { onClick: () => confirmTMatch(m), disabled: confirmingId === m.id, style: { marginLeft: "auto", background: "color-mix(in srgb,var(--success) 13%,transparent)", border: "1px solid color-mix(in srgb,var(--success) 28%,transparent)", borderRadius: 7, padding: "5px 14px", fontSize: 10, fontWeight: 700, color: "var(--success)", cursor: confirmingId === m.id ? "wait" : "pointer", opacity: confirmingId === m.id ? 0.5 : 1, fontFamily: "inherit" } }, confirmingId === m.id ? "Saving…" : "Confirm")), canManage && done && !m.is_bye && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 6 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => undoResult(m), style: { background: "none", border: "1px solid color-mix(in srgb,var(--danger) 25%,transparent)", borderRadius: 6, padding: "3px 10px", fontSize: 9, fontWeight: 700, color: "var(--danger)", cursor: "pointer", fontFamily: "inherit" } }, "Undo")), canManage && m.disputed_by && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, fontSize: 10, fontWeight: 700, color: "var(--warn)" } }, "⚠ Disputed" + (m.dispute_reason ? ": " + m.dispute_reason : "")), !canManage && done && !m.is_bye && iAmIn && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 6 } }, m.disputed_by ? /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, fontWeight: 700, color: "var(--warn)" } }, "⚠ Disputed — TD notified") : /* @__PURE__ */ React.createElement("button", { onClick: () => disputeMatch(m), style: { background: "none", border: "1px solid color-mix(in srgb,var(--warn) 30%,transparent)", borderRadius: 6, padding: "3px 10px", fontSize: 9, fontWeight: 700, color: "var(--warn)", cursor: "pointer", fontFamily: "inherit" } }, "Dispute result")));
   };
   const finalMatch = dbMatches.find((m) => !m.next_match_id);
   const champion = finalMatch && finalMatch.winner_entry_id ? entryDisplay(finalMatch.winner_entry_id) : null;
@@ -536,11 +662,11 @@ function TournamentManageView({ tId, tournaments, profiles = [], refreshTourname
   const rrCol = "28px 1fr 28px 28px 28px 34px 42px";
   const rrSection = /* @__PURE__ */ React.createElement("div", null,
     rrComplete && rrStandings[0] && /* @__PURE__ */ React.createElement("div", { style: { background: "color-mix(in srgb,var(--warn) 12%,transparent)", border: "1px solid color-mix(in srgb,var(--warn) 30%,transparent)", borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13, fontWeight: 800, color: "var(--warn)", textAlign: "center" } }, "🏆 Winner: " + rrStandings[0].name + " — Tournament Complete"),
-    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Bebas Neue',sans-serif", fontSize: 16, letterSpacing: 2, color: "var(--success)" } }, "STANDINGS"), /* @__PURE__ */ React.createElement("button", { onClick: () => generateDraw(true), disabled: generating || rrComplete, title: rrComplete ? "Tournament is complete" : "", style: { background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 10px", fontSize: 10, fontWeight: 700, color: "var(--text-faint)", cursor: generating || rrComplete ? "not-allowed" : "pointer", opacity: generating || rrComplete ? 0.4 : 1, fontFamily: "inherit" } }, generating ? "…" : "↻ Regenerate")),
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Bebas Neue',sans-serif", fontSize: 16, letterSpacing: 2, color: "var(--success)" } }, "STANDINGS"), /* @__PURE__ */ React.createElement("button", { onClick: () => generateDraw(true), disabled: generating || rrComplete || !canManage, title: !canManage ? "Only the tournament director can do this" : rrComplete ? "Tournament is complete" : "", style: { background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 10px", fontSize: 10, fontWeight: 700, color: "var(--text-faint)", cursor: generating || rrComplete ? "not-allowed" : "pointer", opacity: generating || rrComplete ? 0.4 : 1, fontFamily: "inherit" } }, generating ? "…" : "↻ Regenerate")),
     /* @__PURE__ */ React.createElement("div", { style: { background: "var(--surface)", borderRadius: 12, overflow: "hidden", border: "1px solid var(--border)", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: rrCol, padding: "8px 12px", fontSize: 9, fontWeight: 700, letterSpacing: 1, color: "var(--text-dim)", background: "var(--sunken)" } }, ["#", "PLAYER", "P", "W", "L", "PTS", "DIFF"].map((h, hi) => /* @__PURE__ */ React.createElement("span", { key: hi, style: { textAlign: hi === 1 ? "left" : "center" } }, h))), rrStandings.map((s, i) => /* @__PURE__ */ React.createElement("div", { key: s.entryId, style: { display: "grid", gridTemplateColumns: rrCol, padding: "8px 12px", fontSize: 11, alignItems: "center", borderTop: "1px solid var(--border)", background: i === 0 && rrComplete ? "color-mix(in srgb,var(--warn) 8%,transparent)" : "transparent" } }, /* @__PURE__ */ React.createElement("span", { style: { textAlign: "center", fontWeight: 700, color: i === 0 ? "var(--warn)" : "var(--text-faint)" } }, i + 1), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, s.name), /* @__PURE__ */ React.createElement("span", { style: { textAlign: "center", color: "var(--text-dim)" } }, s.played), /* @__PURE__ */ React.createElement("span", { style: { textAlign: "center", color: "var(--success)", fontWeight: 700 } }, s.wins), /* @__PURE__ */ React.createElement("span", { style: { textAlign: "center", color: "var(--danger)", fontWeight: 700 } }, s.losses), /* @__PURE__ */ React.createElement("span", { style: { textAlign: "center", color: "var(--warn)", fontWeight: 800 } }, s.pts), /* @__PURE__ */ React.createElement("span", { style: { textAlign: "center", color: s.diff > 0 ? "var(--success)" : s.diff < 0 ? "var(--danger)" : "var(--text-faint)" } }, (s.diff > 0 ? "+" : "") + s.diff)))),
     /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Bebas Neue',sans-serif", fontSize: 16, letterSpacing: 2, color: "var(--text)", marginBottom: 10 } }, "MATCHES (" + dbMatches.length + ")"),
     dbMatches.map((m) => matchRow(m)));
-  const bracketSection = dbMatches.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { background: "var(--surface)", border: "1px dashed var(--border-strong)", borderRadius: 14, padding: "18px 16px", textAlign: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-dim)", marginBottom: 10 } }, (isSingleElim || isRoundRobin) ? "No draw yet. Add entries above, then generate." : "This format isn't wired up yet."), (isSingleElim || isRoundRobin) && /* @__PURE__ */ React.createElement("button", { onClick: () => generateDraw(false), disabled: entries.length < 2 || generating, style: { background: entries.length < 2 ? "var(--border)" : "linear-gradient(135deg,var(--purple),#7c3aed)", color: entries.length < 2 ? "var(--text-faint)" : "#fff", border: "none", borderRadius: 10, padding: "11px 20px", fontSize: 12, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase", cursor: entries.length < 2 ? "not-allowed" : "pointer", fontFamily: "inherit" } }, (isRoundRobin ? "Generate Round Robin (" : "Generate Draw (") + entries.length + ")")) : isRoundRobin ? rrSection : /* @__PURE__ */ React.createElement("div", null, champion && /* @__PURE__ */ React.createElement("div", { style: { background: "color-mix(in srgb,var(--warn) 12%,transparent)", border: "1px solid color-mix(in srgb,var(--warn) 30%,transparent)", borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13, fontWeight: 800, color: "var(--warn)", textAlign: "center" } }, "🏆 Champion: " + champion + " — Tournament Complete"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Bebas Neue',sans-serif", fontSize: 16, letterSpacing: 2, color: "var(--success)" } }, "BRACKET"), /* @__PURE__ */ React.createElement("button", { onClick: () => generateDraw(true), disabled: generating || rrComplete, title: rrComplete ? "Tournament is complete" : "", style: { background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 10px", fontSize: 10, fontWeight: 700, color: "var(--text-faint)", cursor: generating || rrComplete ? "not-allowed" : "pointer", opacity: generating || rrComplete ? 0.4 : 1, fontFamily: "inherit" } }, generating ? "…" : "↻ Regenerate")), roundNums.map((rn) => /* @__PURE__ */ React.createElement("div", { key: rn, style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: "var(--text-faint)", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 } }, roundsMap[rn][0] && roundsMap[rn][0].round_label || "Round " + rn), roundsMap[rn].map((m) => matchRow(m)))));
+  const bracketSection = dbMatches.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { background: "var(--surface)", border: "1px dashed var(--border-strong)", borderRadius: 14, padding: "18px 16px", textAlign: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-dim)", marginBottom: 10 } }, (isSingleElim || isDoubleElim || isRoundRobin) ? "No draw yet. Add entries above, then generate." : "This format isn't wired up yet."), canManage && (isSingleElim || isDoubleElim || isRoundRobin) && /* @__PURE__ */ React.createElement("button", { onClick: () => generateDraw(false), disabled: entries.length < 2 || generating, style: { background: entries.length < 2 ? "var(--border)" : "linear-gradient(135deg,var(--purple),#7c3aed)", color: entries.length < 2 ? "var(--text-faint)" : "#fff", border: "none", borderRadius: 10, padding: "11px 20px", fontSize: 12, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase", cursor: entries.length < 2 ? "not-allowed" : "pointer", fontFamily: "inherit" } }, (isRoundRobin ? "Generate Round Robin (" : "Generate Draw (") + entries.length + ")")) : isRoundRobin ? rrSection : /* @__PURE__ */ React.createElement("div", null, champion && /* @__PURE__ */ React.createElement("div", { style: { background: "color-mix(in srgb,var(--warn) 12%,transparent)", border: "1px solid color-mix(in srgb,var(--warn) 30%,transparent)", borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13, fontWeight: 800, color: "var(--warn)", textAlign: "center" } }, "🏆 Champion: " + champion + " — Tournament Complete"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Bebas Neue',sans-serif", fontSize: 16, letterSpacing: 2, color: "var(--success)" } }, "BRACKET"), /* @__PURE__ */ React.createElement("button", { onClick: () => generateDraw(true), disabled: generating || rrComplete || !canManage, title: !canManage ? "Only the tournament director can do this" : rrComplete ? "Tournament is complete" : "", style: { background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 10px", fontSize: 10, fontWeight: 700, color: "var(--text-faint)", cursor: generating || rrComplete ? "not-allowed" : "pointer", opacity: generating || rrComplete ? 0.4 : 1, fontFamily: "inherit" } }, generating ? "…" : "↻ Regenerate")), roundNums.map((rn) => /* @__PURE__ */ React.createElement("div", { key: rn, style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: "var(--text-faint)", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 } }, roundsMap[rn][0] && roundsMap[rn][0].round_label || "Round " + rn), roundsMap[rn].map((m) => matchRow(m)))));
   const tc = ((_a = TIERS.find((x) => x.id === t.tier)) == null ? void 0 : _a.color) || "var(--purple)";
   const formatLabel = { single_elimination: "Single Elim", double_elimination: "Double Elim", triple_elimination: "Triple Elim", round_robin: "Round Robin", league: "League", swiss: "Swiss" };
   const formatIcon = { single_elimination: "\u26A1", double_elimination: "🔄", triple_elimination: "🔱", round_robin: "🔃", league: "🏅", swiss: "🔀" };
@@ -683,7 +809,7 @@ function TournamentListView({ tournaments, setManaged: setManaged2, setTab: setT
     }, style: { background: "var(--surface)", borderRadius: 13, overflow: "hidden", border: "1px solid var(--border)", marginBottom: 10, cursor: "pointer" }, onMouseOver: (e) => e.currentTarget.style.borderColor = "var(--border-strong)", onMouseOut: (e) => e.currentTarget.style.borderColor = "var(--border)" }, /* @__PURE__ */ React.createElement("div", { style: { height: 2, background: `linear-gradient(90deg,${tc},transparent)` } }), /* @__PURE__ */ React.createElement("div", { style: { padding: "13px 14px" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, color: "var(--text)", fontSize: 14, flex: 1, marginRight: 8 } }, t.name), /* @__PURE__ */ React.createElement(StatusPill, { status: t.status })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 } }, /* @__PURE__ */ React.createElement(TierBadge, { tier: t.tier }), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, background: tc + "22", color: tc, padding: "2px 8px", borderRadius: 5, fontWeight: 700 } }, fmtIcon[t.format] || "🏆", " ", fmtLabel[t.format] || t.format), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "var(--text-faint)" } }, t.matchType, " \xB7 ", t.registeredCount, " entries")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--text-dim)" } }, t.startDate, " \xB7 ", t.location)));
   }));
 }
-function TournamentDirectorScreen({ currentUser = null, profiles = [] }) {
+function TournamentDirectorScreen({ currentUser = null, profiles = [], appRole = "player", myProfile = null }) {
   const [tab, setTab2] = useState(() => { try { return (sessionStorage.getItem("smaash_tourn") || new URLSearchParams(window.location.search).get("t")) ? "manage" : "list"; } catch (e) { return "list"; } });
   const [tournaments, setTournaments] = useState(MOCK_TOURNAMENTS_DATA);
   const loadTournaments = () => {
@@ -694,6 +820,7 @@ function TournamentDirectorScreen({ currentUser = null, profiles = [] }) {
       if (Array.isArray(data)) setTournaments(data.map((t) => ({
         id: t.id,
         name: t.name,
+        created_by: t.created_by,
         tier: t.tier || 2,
         format: t.format,
         matchType: t.match_type,
@@ -817,7 +944,7 @@ function TournamentDirectorScreen({ currentUser = null, profiles = [] }) {
   return /* @__PURE__ */ React.createElement("div", { style: { animation: "fadeIn 0.3s ease" } }, toast && /* @__PURE__ */ React.createElement(Toast, { msg: toast.msg, color: toast.c }), tab !== "manage" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Bebas Neue',sans-serif", fontSize: 26, letterSpacing: 3, color: "var(--text)", marginBottom: 4 } }, "TOURNAMENT DIRECTOR"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--text-faint)", letterSpacing: 2, textTransform: "uppercase", marginBottom: 16 } }, "Create \xB7 Seed \xB7 Run \xB7 Score"), tab !== "create" && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 0, marginBottom: 16, background: "var(--surface)", borderRadius: 10, padding: 3, border: "1px solid var(--border)" } }, [{ id: "list", label: "My Tournaments" }, { id: "create", label: "Create New" }].map((tb) => /* @__PURE__ */ React.createElement("button", { key: tb.id, onClick: () => setTab2(tb.id), style: { flex: 1, background: tab === tb.id ? "var(--border)" : "none", border: "none", borderRadius: 8, padding: "9px 0", fontSize: 10, fontWeight: 700, color: tab === tb.id ? "var(--text)" : "var(--text-faint)", cursor: "pointer", fontFamily: "inherit", textTransform: "uppercase", letterSpacing: 0.5 } }, tb.label)))), tab === "list" && /* @__PURE__ */ React.createElement(TournamentListView, { tournaments, setManaged: setManaged2, setTab: setTab2 }), tab === "create" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("button", { onClick: () => {
     setTab2("list");
     setFormStep(1);
-  }, style: { background: "none", border: "none", color: "var(--text-dim)", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: 16, padding: 0 } }, "\u2190 Back"), /* @__PURE__ */ React.createElement(TournamentCreateWizard, { form, setForm, formStep, setFormStep, createTournament, showToast, profiles })), tab === "manage" && managed && (tournaments.some((x) => x.id === managed) ? /* @__PURE__ */ React.createElement(TournamentManageView, { tId: managed, tournaments, profiles, showToast, refreshTournaments: loadTournaments }) : /* @__PURE__ */ React.createElement("div", { style: { color: "var(--text-faint)", padding: 20, fontSize: 12 } }, "Loading tournament…")));
+  }, style: { background: "none", border: "none", color: "var(--text-dim)", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: 16, padding: 0 } }, "\u2190 Back"), /* @__PURE__ */ React.createElement(TournamentCreateWizard, { form, setForm, formStep, setFormStep, createTournament, showToast, profiles })), tab === "manage" && managed && (tournaments.some((x) => x.id === managed) ? /* @__PURE__ */ React.createElement(TournamentManageView, { tId: managed, tournaments, profiles, showToast, refreshTournaments: loadTournaments, currentUser, appRole, myProfile }) : /* @__PURE__ */ React.createElement("div", { style: { color: "var(--text-faint)", padding: 20, fontSize: 12 } }, "Loading tournament…")));
 }
 function NotificationsScreen({ matches = [], currentUser = null, setScreen = null, setUnreadNotifs = null, setFocusMatchId = null }) {
   const [notifications, setNotifications] = useState([]);

@@ -574,7 +574,7 @@ function MoreScreen({ clubs, setClubs, matches = [], setMatches, profiles: profi
       confirm: /* @__PURE__ */ React.createElement(MatchConfirm, { matches, setMatches, profiles: profiles2, currentUser, refetchMatches, refetchProfiles }),
       history: /* @__PURE__ */ React.createElement(MatchHistory, { matches, profiles: profiles2, currentUser, refetch: setMatches }),
       director: /* @__PURE__ */ React.createElement(DirectorPanel, { matches, setMatches, profiles: profiles2, currentUser, myProfile, clubs, refetchMatches, refetchProfiles }),
-      tournament: /* @__PURE__ */ React.createElement(TournamentDirectorScreen, { currentUser, profiles: profiles2 }),
+      tournament: /* @__PURE__ */ React.createElement(TournamentDirectorScreen, { currentUser, profiles: profiles2, appRole, myProfile }),
       ladder: /* @__PURE__ */ React.createElement(LadderNightScreen, { matches, setMatches }),
       events: /* @__PURE__ */ React.createElement(EventsScreen, null),
       heatmap: /* @__PURE__ */ React.createElement(HeatmapScreen, { matches, profiles: profiles2, currentUser, myProfile }),

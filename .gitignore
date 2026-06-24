@@ -50,8 +50,8 @@ $RECYCLE.BIN/
 .claude/
 
 # ── Project-specific scratch (uncomment if you don't want them tracked) ──
-# index backup.html
-# src_index.html
+ index backup.html
+ src_index.html
 
 
 sql/*
