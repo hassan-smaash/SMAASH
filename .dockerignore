@@ -1,0 +1,36 @@
+# Keep the image to ONLY what the browser needs (index.html, js/, manifest.json, icons).
+
+# VCS / tooling
+.git
+.gitignore
+.claude
+.vercel
+__pycache__
+node_modules
+package-lock.json
+
+# Backend / data — never served, run manually in Supabase
+sql
+*.sql
+
+# Dev servers & scripts (not needed in the nginx image)
+serve.py
+serve.js
+recalculate_ratings*.js
+audit_ratings.js
+
+# Docs / data dumps
+*.md
+*.xlsx
+*.docx
+*.csv
+
+# Large backups — never ship these
+index backup.html
+src_index.html
+
+# Platform / build meta (nginx.conf is intentionally NOT ignored — the Dockerfile COPYs it)
+vercel.json
+Dockerfile
+docker-compose.yml
+.dockerignore

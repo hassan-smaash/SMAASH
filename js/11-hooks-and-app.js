@@ -297,7 +297,7 @@ function SMAASHApp() {
         } else {
           fetch("https://yqqezxyayndzmqahguac.supabase.co/rest/v1/profiles", {
             method: "POST",
-            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + tok, "Content-Type": "application/json", "Prefer": "return=minimal" },
+            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + tok, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal" },
             body: JSON.stringify(__spreadValues({
               id: uid,
               email,
@@ -307,7 +307,8 @@ function SMAASHApp() {
               singles_rd: 200,
               doubles_rd: 200,
               singles_volatility: 0.06,
-              doubles_volatility: 0.06
+              doubles_volatility: 0.06,
+              placement_completed: true
             }, selectedClubId ? { club_id: selectedClubId } : {}))
           }).then((r2) => {
             console.log("Quiz POST:", r2.status, "glicko:", glickoRating);
@@ -322,6 +323,7 @@ function SMAASHApp() {
     setTimeout(() => saveRating(0), 2e3);
     setNeedsPlacement(false);
   } });
+  if (profiles2.length === 0) return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'Bebas Neue',sans-serif", fontSize: 32, letterSpacing: 4, color: "var(--primary)", animation: "pulse 1.5s infinite" } }, "SMAASH"));
   const screenMap = {
     submit: /* @__PURE__ */ React.createElement(MatchSubmitWrapper, { onSubmit: addMatch, userRole: appRole, currentUser, profiles: profiles2, matches, pendingConfirms, refetchMatches, refetchProfiles }),
     leaderboard: /* @__PURE__ */ React.createElement(LeaderboardScreen, { matches, profiles: profiles2, currentUser, myProfile, clubs }),

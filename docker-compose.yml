@@ -1,0 +1,9 @@
+# Convenience wrapper: `docker compose up --build` -> http://localhost:8080
+services:
+  smaash:
+    build: .
+    image: smaash:latest
+    container_name: smaash
+    ports:
+      - "8080:80"
+    restart: unless-stopped

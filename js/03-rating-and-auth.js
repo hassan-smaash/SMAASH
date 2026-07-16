@@ -232,8 +232,10 @@ function AuthScreen({ onAuth }) {
           const arr = await resp.json();
           if (Array.isArray(arr) && arr.length > 0) {
             const p = arr[0];
-            // Flag as needing quiz if placement_completed is false/null AND rating is still default
-            if (!p.placement_completed && (p.doubles_rating === 533 || p.doubles_rating === null)) {
+            // Flag as needing quiz ONLY if placement was never completed AND the rating is still
+            // at a fresh default (500 = current schema default, 533 = legacy, or null). Once the
+            // quiz saves placement_completed=true, this is false forever — no re-asking.
+            if (!p.placement_completed && (p.doubles_rating === 533 || p.doubles_rating === 500 || p.doubles_rating === null)) {
               needsQuiz = true;
             }
           } else {

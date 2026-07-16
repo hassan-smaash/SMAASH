@@ -10,6 +10,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **k):
         super().__init__(*a, directory=ROOT, **k)
 
+    def end_headers(self):
+        # Never let the browser cache dev files — a code change is always picked up on refresh.
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def send_head(self):
         # SPA fallback: any path that isn't a real file serves index.html
         # (so /more, /community, /t/<slug> all work on refresh).
