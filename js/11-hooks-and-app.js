@@ -76,10 +76,20 @@ function useProfiles(userId) {
           volatility: p.doubles_volatility || 0.06,
           reliability: (() => {
             const rd = p.doubles_rd || 350;
-            if (rd < 150) return "Verified";
-            if (rd < 300) return "Developing";
-            return "Provisional";
+            const RD_MAX = 350, RD_MIN = 80;
+            if (rd >= RD_MAX) return "0%";
+            return Math.round((1 - (rd - RD_MIN) / (RD_MAX - RD_MIN)) * 100) + "%";
           })(),
+          singlesReliability: (() => {
+            const rd = p.singles_rd || 350;
+            const matches = p.singles_matches || 0;
+            if (matches === 0) return "—";
+            const RD_MAX = 350, RD_MIN = 80;
+            if (rd >= RD_MAX) return "0%";
+            return Math.round((1 - (rd - RD_MIN) / (RD_MAX - RD_MIN)) * 100) + "%";
+          })(),
+          doublesRd: p.doubles_rd || 350,
+          singlesRd: p.singles_rd || 350,
           tier: p.tier || 1,
           clubId: p.club_id,
           provisional: (p.doubles_rd || 350) >= 300,
