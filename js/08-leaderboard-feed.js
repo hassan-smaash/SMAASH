@@ -190,7 +190,7 @@ function LeaderboardScreen({ matches = [], profiles: profiles2 = [], currentUser
     if (filterGender !== "all" && p.gender !== filterGender) return false;
     if (filterAge !== "all" && p.ageGroup !== filterAge) return false;
     if (filterStatus === "verified" && p.provisional) return false;
-    if (filterStatus === "provisional" && !p.provisional) return false;
+    if (filterStatus ===  "0%" && !p.provisional) return false;
     return true;
   }).sort((a, b) => {
     const aLocked = (a.played || 0) < 5;
@@ -298,7 +298,7 @@ function LeaderboardScreen({ matches = [], profiles: profiles2 = [], currentUser
       label: "Status",
       value: filterStatus,
       onChange: setFilterStatus,
-      options: [{ v: "verified", l: "\u2713 Verified only" }, { v: "provisional", l: "\u25D1 Provisional only" }]
+      options: [{ v: "verified", l: "\u2713 Verified only" }, { v:  "0%", l: "\u25D1 Provisional only" }]
     }
   )), activeFilters > 0 && !showFilters && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 } }, [
     { val: filterTier, label: filterTier !== "all" ? `Tier: ${(_a = TIERS.find((t) => t.id === Number(filterTier))) == null ? void 0 : _a.badge}` : null, reset: () => setFilterTier("all") },
