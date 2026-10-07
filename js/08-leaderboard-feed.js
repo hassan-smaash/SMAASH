@@ -347,7 +347,7 @@ function LeaderboardScreen({ matches = [], profiles: profiles2 = [], currentUser
         { label: "RD", value: Math.round(player.rd || 350), color: "var(--text-faint)" }
       ].map((s, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { background: "var(--sunken)", borderRadius: 8, padding: "8px 6px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 900, color: s.color, fontFamily: "'Bebas Neue',sans-serif" } }, s.value), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 8, color: "var(--text-faint)", letterSpacing: 1, marginTop: 1 } }, s.label.toUpperCase())))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 8 } }, [
         { label: "Played", value: player.played || 0, color: "var(--text)" },
-        { label: "Reliability", value: player.reliability || "Provisional", color: player.reliability === "Verified" ? "var(--success)" : player.reliability === "Developing" ? "var(--warn)" : "var(--text-dim)" },
+        { label: "Reliability", value: player.reliability || "Provisional", color: "var(--text-dim)" },
         { label: "Win Rate", value: (player.played || 0) > 0 ? (player.winRate || 0) + "%" : "--", color: (player.winRate || 0) >= 50 ? "var(--success)" : "var(--danger)" },
         { label: "Wins", value: player.wins || 0, color: "var(--success)" },
         { label: "Losses", value: player.losses || 0, color: "var(--danger)" },
